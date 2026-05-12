@@ -31,12 +31,14 @@ def verify_token(authorization: Optional[str], token: Optional[str]):
 
 def fetch_mantis(path: str) -> dict:
     url = f"{MANTIS_URL}/api/rest/{path}"
-    req = urllib.request.Request(url, headers={"Authorization": MANTIS_API_KEY})
+    # Mantis REST API 使用 token 前綴
+    req = urllib.request.Request(url, headers={"Authorization": f"token {MANTIS_API_KEY}"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        raise HTTPException(status_code=e.code, detail=f"Mantis error: {e.reason}")
+        body = e.read().decode("utf-8", errors="ignore")[:300]
+        raise HTTPException(status_code=e.code, detail=f"Mantis error: {e.reason} | {body}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
