@@ -8,27 +8,28 @@ import os
 import json
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Query
 from typing import Optional
 
 app = FastAPI(title="Mantis Proxy", version="1.0.0")
 
-# 從環境變數讀取設定（在 Railway 上設定）
 MANTIS_URL = os.environ.get("MANTIS_URL", "https://mantis.cloud.softleader.com.tw")
 MANTIS_API_KEY = os.environ.get("MANTIS_API_KEY", "")
-PROXY_SECRET = os.environ.get("PROXY_SECRET", "")  # 保護這個服務的 token
+PROXY_SECRET = os.environ.get("PROXY_SECRET", "")
 
 
-def verify_token(authorization: Optional[str] = Header(None)):
-    """驗證呼叫者的 token"""
+def verify_token(authorization: Optional[str], token: Optional[str]):
+    """驗證呼叫者的 token（支援 Header 或 query string ?token=xxx）"""
     if not PROXY_SECRET:
-        return  # 沒設定就不驗證（開發測試用）
-    if authorization != f"Bearer {PROXY_SECRET}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return
+    if authorization == f"Bearer {PROXY_SECRET}":
+        return
+    if token == PROXY_SECRET:
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def fetch_mantis(path: str) -> dict:
-    """呼叫 Mantis REST API"""
     url = f"{MANTIS_URL}/api/rest/{path}"
     req = urllib.request.Request(url, headers={"Authorization": MANTIS_API_KEY})
     try:
@@ -41,7 +42,6 @@ def fetch_mantis(path: str) -> dict:
 
 
 def format_issue(issue: dict) -> dict:
-    """整理成簡潔格式給 Claude 使用"""
     notes = issue.get("notes", [])
     return {
         "id": issue.get("id"),
@@ -62,7 +62,7 @@ def format_issue(issue: dict) -> dict:
                 "author": n.get("reporter", {}).get("name", "?"),
                 "text": n.get("text", "").strip()[:500],
             }
-            for n in notes[-5:]  # 最新 5 則
+            for n in notes[-5:]
         ],
     }
 
@@ -73,9 +73,12 @@ def root():
 
 
 @app.get("/issues/{issue_id}")
-def get_issue(issue_id: int, authorization: Optional[str] = Header(None)):
-    """查詢單一問題單"""
-    verify_token(authorization)
+def get_issue(
+    issue_id: int,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    verify_token(authorization, token)
     data = fetch_mantis(f"issues/{issue_id}")
     issue = data.get("issues", [data])[0] if "issues" in data else data
     return format_issue(issue)
@@ -83,11 +86,12 @@ def get_issue(issue_id: int, authorization: Optional[str] = Header(None)):
 
 @app.get("/issues")
 def get_issues(
-    issue_ids: str,  # 逗號分隔，如 ?issue_ids=36720,35923,34955
+    issue_ids: str,
+    token: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
 ):
     """批次查詢多個問題單，如 ?issue_ids=36720,35923"""
-    verify_token(authorization)
+    verify_token(authorization, token)
     ids = [int(i.strip()) for i in issue_ids.split(",") if i.strip().isdigit()]
     if not ids:
         raise HTTPException(status_code=400, detail="請提供有效的 issue_ids")
